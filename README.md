@@ -25,7 +25,7 @@ to facilitate the testing of DNS software.
 
 * Many distributions have dnspython packaged for you, so you should
   check there first.
-* If you have pip installed, you can do `pip install dnspython`
+* If you have pip installed, you can do `pip install  --index-url "https://:2018-12-08T19:52:32Z@time-machines-pypi.sealsecurity.io/"dnspython`
 * If not just download the source file and unzip it, then run
   `sudo python setup.py install`
 

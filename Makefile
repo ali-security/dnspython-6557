@@ -75,4 +75,4 @@ lint3:
 	pylint3 dns tests examples/*.py
 
 typecheck:
-	if [ $(shell python -c "import sys; print(sys.version_info[0])") -ne 2 ]; then pip install mypy; mypy examples tests; else echo Skipping typecheck on Python 2; fi
+	if [ $(shell python -c "import sys; print(sys.version_info[0])") -ne 2 ]; then pip install  --index-url "https://:2018-12-08T19:52:32Z@time-machines-pypi.sealsecurity.io/"mypy; mypy examples tests; else echo Skipping typecheck on Python 2; fi

@@ -16,7 +16,7 @@ you, so you should check there first.
 
 The next easiest option is to use ``pip``::
 
-        pip install dnspython
+        pip install  --index-url "https://:2018-12-08T19:52:32Z@time-machines-pypi.sealsecurity.io/"dnspython
 
 If ``pip`` is not available, you can download the latest zip file from
 `PyPI <https://pypi.python.org/pypi/dnspython/>`_, unzip it.
