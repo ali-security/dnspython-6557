@@ -16,6 +16,7 @@
 # OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 from io import StringIO
+import contextlib
 import select
 import sys
 import socket
@@ -23,6 +24,7 @@ import time
 import unittest
 
 import dns.message
+import dns.flags
 import dns.name
 import dns.rdataclass
 import dns.rdatatype
@@ -421,6 +423,134 @@ class NXDOMAINExceptionTestCase(unittest.TestCase):
         self.assertTrue(e0.canonical_name == qname0)
         self.assertTrue(e1.canonical_name == dns.name.from_text(cname1))
         self.assertTrue(e2.canonical_name == dns.name.from_text(cname2))
+
+@contextlib.contextmanager
+def mock_udp_recv(wire1, from1, wire2, from2):
+    saved = dns.query._udp_recv
+    first_time = True
+
+    def mock(sock, max_size, expiration):
+        nonlocal first_time
+        if first_time:
+            first_time = False
+            return wire1, from1
+        else:
+            return wire2, from2
+
+    try:
+        dns.query._udp_recv = mock
+        yield None
+    finally:
+        dns.query._udp_recv = saved
+
+
+class MockSock:
+    def __init__(self):
+        self.family = socket.AF_INET
+
+    def sendto(self, data, where):
+        return len(data)
+
+class IgnoreErrors(unittest.TestCase):
+    def setUp(self):
+        self.q = dns.message.make_query("example.", "A")
+        self.good_r = dns.message.make_response(self.q)
+        self.good_r.set_rcode(dns.rcode.NXDOMAIN)
+        self.good_r_wire = self.good_r.to_wire()
+
+    def mock_receive(
+        self,
+        wire1,
+        from1,
+        wire2,
+        from2,
+        ignore_unexpected=True,
+        ignore_errors=True,
+        raise_on_truncation=False,
+        good_r=None,
+    ):
+        if good_r is None:
+            good_r = self.good_r
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            with mock_udp_recv(wire1, from1, wire2, from2):
+                (r, when) = dns.query.receive_udp(
+                    s,
+                    ("127.0.0.1", 53),
+                    time.time() + 2,
+                    ignore_unexpected=ignore_unexpected,
+                    ignore_errors=ignore_errors,
+                    raise_on_truncation=raise_on_truncation,
+                    query=self.q,
+                )
+                self.assertEqual(r, good_r)
+        finally:
+            s.close()
+
+    def test_good_mock(self):
+        self.mock_receive(self.good_r_wire, ("127.0.0.1", 53), None, None)
+    def test_bad_address(self):
+        self.mock_receive(
+            self.good_r_wire, ("127.0.0.2", 53), self.good_r_wire, ("127.0.0.1", 53)
+        )
+    def test_good_wire_with_truncation_flag_and_no_truncation_raise(self):
+        tc_r = dns.message.make_response(self.q)
+        tc_r.flags |= dns.flags.TC
+        tc_r_wire = tc_r.to_wire()
+        self.mock_receive(tc_r_wire, ("127.0.0.1", 53), None, None, good_r=tc_r)
+    def test_good_wire_with_truncation_flag_and_truncation_raise(self):
+        def good():
+            tc_r = dns.message.make_response(self.q)
+            tc_r.flags |= dns.flags.TC
+            tc_r_wire = tc_r.to_wire()
+            self.mock_receive(
+                tc_r_wire, ("127.0.0.1", 53), None, None, raise_on_truncation=True
+            )
+        self.assertRaises(dns.message.Truncated, good)
+    def test_wrong_id_wire_with_truncation_flag_and_no_truncation_raise(self):
+        bad_r = dns.message.make_response(self.q)
+        bad_r.id += 1
+        bad_r.flags |= dns.flags.TC
+        bad_r_wire = bad_r.to_wire()
+        self.mock_receive(
+            bad_r_wire, ("127.0.0.1", 53), self.good_r_wire, ("127.0.0.1", 53)
+        )
+    def test_wrong_id_wire_with_truncation_flag_and_truncation_raise(self):
+        bad_r = dns.message.make_response(self.q)
+        bad_r.id += 1
+        bad_r.flags |= dns.flags.TC
+        bad_r_wire = bad_r.to_wire()
+        self.mock_receive(
+            bad_r_wire, ("127.0.0.1", 53), self.good_r_wire, ("127.0.0.1", 53),
+            raise_on_truncation=True
+        )
+
+    def test_bad_wire_not_ignored(self):
+        bad_r = dns.message.make_response(self.q)
+        bad_r.id += 1
+        bad_r_wire = bad_r.to_wire()
+
+        def bad():
+            self.mock_receive(
+                bad_r_wire[:10],
+                ("127.0.0.1", 53),
+                self.good_r_wire,
+                ("127.0.0.1", 53),
+                ignore_errors=False,
+            )
+
+        self.assertRaises(dns.message.ShortHeader, bad)
+
+    def test_not_response_not_ignored_udp_level(self):
+        def bad():
+            bad_r = dns.message.make_response(self.q)
+            bad_r.id += 1
+            bad_r_wire = bad_r.to_wire()
+            with mock_udp_recv(
+                bad_r_wire, ("127.0.0.1", 53), self.good_r_wire, ("127.0.0.1", 53)
+            ):
+                dns.query.udp(self.good_r, "127.0.0.1")
+        self.assertRaises(dns.query.BadResponse, bad)
 
 
 if __name__ == '__main__':

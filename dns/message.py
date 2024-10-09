@@ -66,6 +66,22 @@ class BadTSIG(dns.exception.FormError):
 
 class UnknownTSIGKey(dns.exception.DNSException):
     """A TSIG with an unknown key was received."""
+class Truncated(dns.exception.DNSException):
+    """The truncated flag is set."""
+
+    supp_kwargs = {"message"}
+
+    # We do this as otherwise mypy complains about unexpected keyword argument
+    # idna_exception
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def message(self):
+        """As much of the message as could be processed.
+
+        Returns a ``dns.message.Message``.
+        """
+        return self.kwargs["message"]
 
 
 #: The question section number
@@ -759,7 +775,7 @@ class _WireReader(object):
 def from_wire(wire, keyring=None, request_mac=b'', xfr=False, origin=None,
               tsig_ctx=None, multi=False, first=True,
               question_only=False, one_rr_per_rrset=False,
-              ignore_trailing=False):
+              ignore_trailing=False, raise_on_truncation=False):
     """Convert a DNS wire format message into a message
     object.
 
@@ -820,8 +836,19 @@ def from_wire(wire, keyring=None, request_mac=b'', xfr=False, origin=None,
 
     reader = _WireReader(wire, m, question_only, one_rr_per_rrset,
                          ignore_trailing)
-    reader.read()
-
+    try:
+        reader.read()
+    except dns.exception.FormError:
+        if (
+                reader.message
+                and (reader.message.flags & dns.flags.TC)
+                and raise_on_truncation
+        ):
+            raise Truncated(message=reader.message)
+        else:
+            raise
+    if m.flags & dns.flags.TC and raise_on_truncation:
+        raise Truncated(message=m)
     return m
 
 

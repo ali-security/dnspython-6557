@@ -21,6 +21,7 @@ import socket
 import sys
 import time
 import random
+from codecs import ignore_errors
 
 try:
     import threading as _threading
@@ -910,7 +911,10 @@ class Resolver(object):
                             response = dns.query.udp(request, nameserver,
                                                      timeout, port,
                                                      source=source,
-                                                     source_port=source_port)
+                                                     source_port=source_port,
+                                                     ignore_errors=True,
+                                                     raise_on_truncation=True,
+                                                     ignore_unexpected=True,)
                             if response.flags & dns.flags.TC:
                                 # Response truncated; retry with TCP.
                                 tcp_attempt = True

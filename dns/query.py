@@ -219,10 +219,39 @@ def send_udp(sock, what, destination, expiration=None):
     n = sock.sendto(what, destination)
     return (n, sent_time)
 
+def _matches_destination(af, from_address, destination, ignore_unexpected):
+    # Check that from_address is appropriate for a response to a query
+    # sent to destination.
+    if not destination:
+        return True
+    if _addresses_equal(af, from_address, destination) or (
+        dns.inet.is_multicast(destination[0]) and from_address[1:] == destination[1:]
+    ):
+        return True
+    elif ignore_unexpected:
+        return False
+    raise UnexpectedSource(
+        f"got a response from {from_address} instead of " f"{destination}"
+    )
+
+def _udp_recv(sock, max_size, expiration):
+    """Reads a datagram from the socket.
+    A Timeout exception will be raised if the operation is not completed
+    by the expiration time.
+    """
+    while True:
+        try:
+            return sock.recvfrom(max_size)
+        except BlockingIOError:
+            _wait_for_readable(sock, expiration)
 
 def receive_udp(sock, destination, expiration=None,
                 ignore_unexpected=False, one_rr_per_rrset=False,
-                keyring=None, request_mac=b'', ignore_trailing=False):
+                keyring=None, request_mac=b'', ignore_trailing=False,
+                raise_on_truncation=False,
+                ignore_errors=False,
+                query=None,
+                ):
     """Read a DNS message from a UDP socket.
 
     *sock*, a ``socket``.
@@ -254,25 +283,50 @@ def receive_udp(sock, destination, expiration=None,
     """
 
     wire = b''
-    while 1:
-        _wait_for_readable(sock, expiration)
-        (wire, from_address) = sock.recvfrom(65535)
-        if _addresses_equal(sock.family, from_address, destination) or \
-           (dns.inet.is_multicast(destination[0]) and
-            from_address[1:] == destination[1:]):
-            break
-        if not ignore_unexpected:
-            raise UnexpectedSource('got a response from '
-                                   '%s instead of %s' % (from_address,
-                                                         destination))
-    received_time = time.time()
-    r = dns.message.from_wire(wire, keyring=keyring, request_mac=request_mac,
-                              one_rr_per_rrset=one_rr_per_rrset,
-                              ignore_trailing=ignore_trailing)
-    return (r, received_time)
+    while True:
+        (wire, from_address) = _udp_recv(sock, 65535, expiration)
+        if not _matches_destination(
+            sock.family, from_address, destination, ignore_unexpected
+        ):
+            continue
+        received_time = time.time()
+        try:
+            r = dns.message.from_wire(
+                wire,
+                keyring=keyring,
+                request_mac=request_mac,
+                one_rr_per_rrset=one_rr_per_rrset,
+                ignore_trailing=ignore_trailing,
+                raise_on_truncation=raise_on_truncation,
+            )
+        except dns.message.Truncated as e:
+            # If we got Truncated and not FORMERR, we at least got the header with TC
+            # set, and very likely the question section, so we'll re-raise if the
+            # message seems to be a response as we need to know when truncation happens.
+            # We need to check that it seems to be a response as we don't want a random
+            # injected message with TC set to cause us to bail out.
+            if (
+                ignore_errors
+                and query is not None
+                and not query.is_response(e.message())
+            ):
+                continue
+            else:
+                raise
+        except Exception:
+            if ignore_errors:
+                continue
+            else:
+                raise
+        if ignore_errors and query is not None and not query.is_response(r):
+            continue
+        return (r, received_time)
 
 def udp(q, where, timeout=None, port=53, af=None, source=None, source_port=0,
-        ignore_unexpected=False, one_rr_per_rrset=False, ignore_trailing=False):
+        ignore_unexpected=False, one_rr_per_rrset=False, ignore_trailing=False,
+        ignore_errors=False,
+        raise_on_truncation=False
+    ):
     """Return the response obtained after sending a query via UDP.
 
     *q*, a ``dns.message.Message``, the query to send
@@ -322,7 +376,10 @@ def udp(q, where, timeout=None, port=53, af=None, source=None, source_port=0,
         (_, sent_time) = send_udp(s, wire, destination, expiration)
         (r, received_time) = receive_udp(s, destination, expiration,
                                          ignore_unexpected, one_rr_per_rrset,
-                                         q.keyring, q.mac, ignore_trailing)
+                                         q.keyring, q.mac, ignore_trailing,
+                                         ignore_errors=ignore_errors,
+                                         raise_on_truncation=raise_on_truncation,
+                                         query=q)
     finally:
         if sent_time is None or received_time is None:
             response_time = 0
@@ -330,7 +387,7 @@ def udp(q, where, timeout=None, port=53, af=None, source=None, source_port=0,
             response_time = received_time - sent_time
         s.close()
     r.time = response_time
-    if not q.is_response(r):
+    if not (ignore_errors or q.is_response(r)):
         raise BadResponse
     return r
 
