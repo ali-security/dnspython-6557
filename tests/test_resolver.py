@@ -427,12 +427,11 @@ class NXDOMAINExceptionTestCase(unittest.TestCase):
 @contextlib.contextmanager
 def mock_udp_recv(wire1, from1, wire2, from2):
     saved = dns.query._udp_recv
-    first_time = True
+    first_time = [True]  # Use a mutable list to avoid nonlocal
 
     def mock(sock, max_size, expiration):
-        nonlocal first_time
-        if first_time:
-            first_time = False
+        if first_time[0]:
+            first_time[0] = False
             return wire1, from1
         else:
             return wire2, from2
@@ -442,7 +441,6 @@ def mock_udp_recv(wire1, from1, wire2, from2):
         yield None
     finally:
         dns.query._udp_recv = saved
-
 
 class MockSock:
     def __init__(self):
