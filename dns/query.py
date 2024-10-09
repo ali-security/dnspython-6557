@@ -231,7 +231,7 @@ def _matches_destination(af, from_address, destination, ignore_unexpected):
     elif ignore_unexpected:
         return False
     raise UnexpectedSource(
-        f"got a response from {from_address} instead of " f"{destination}"
+        "got a response from "+str(from_address)+" instead of "+str(destination)
     )
 
 def _udp_recv(sock, max_size, expiration):
