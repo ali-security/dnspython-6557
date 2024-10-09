@@ -234,6 +234,11 @@ def _matches_destination(af, from_address, destination, ignore_unexpected):
         "got a response from "+str(from_address)+" instead of "+str(destination)
     )
 
+if sys.version_info >= (3, 3):
+    blocking_io_error = BlockingIOError
+else:
+    blocking_io_error = socket.error
+
 def _udp_recv(sock, max_size, expiration):
     """Reads a datagram from the socket.
     A Timeout exception will be raised if the operation is not completed
@@ -242,7 +247,7 @@ def _udp_recv(sock, max_size, expiration):
     while True:
         try:
             return sock.recvfrom(max_size)
-        except BlockingIOError:
+        except blocking_io_error:
             _wait_for_readable(sock, expiration)
 
 def receive_udp(sock, destination, expiration=None,
